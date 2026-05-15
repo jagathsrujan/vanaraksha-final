@@ -1,83 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" fill="none">
-  <!-- Background sky gradient -->
-  <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#d1fae5"/>
-      <stop offset="100%" stop-color="#f8fafc"/>
-    </linearGradient>
-  </defs>
-  <rect width="800" height="300" fill="url(#sky)"/>
-
-  <!-- FLOOD ZONE (left) -->
-  <path d="M0 200Q100 180 200 200T400 200" stroke="#2563eb" stroke-width="3" fill="none" opacity="0.6"/>
-  <path d="M0 215Q100 195 200 215T400 215" stroke="#2563eb" stroke-width="2.5" fill="none" opacity="0.4"/>
-  <path d="M0 230Q100 210 200 230T400 230" stroke="#2563eb" stroke-width="2" fill="none" opacity="0.3"/>
-  <!-- Rain cloud -->
-  <ellipse cx="120" cy="60" rx="50" ry="25" fill="#94a3b8" opacity="0.7"/>
-  <line x1="100" y1="80" x2="95" y2="100" stroke="#94a3b8" stroke-width="2"/>
-  <line x1="120" y1="82" x2="118" y2="105" stroke="#94a3b8" stroke-width="2"/>
-  <line x1="140" y1="80" x2="145" y2="100" stroke="#94a3b8" stroke-width="2"/>
-  <!-- Rain drops -->
-  <line x1="105" y1="105" x2="102" y2="120" stroke="#2563eb" stroke-width="1.5" opacity="0.5"/>
-  <line x1="120" y1="110" x2="118" y2="125" stroke="#2563eb" stroke-width="1.5" opacity="0.5"/>
-  <line x1="135" y1="105" x2="133" y2="120" stroke="#2563eb" stroke-width="1.5" opacity="0.5"/>
-  <!-- Low building silhouettes -->
-  <rect x="30" y="180" width="30" height="20" rx="2" fill="#1e293b" opacity="0.3"/>
-  <rect x="70" y="170" width="25" height="30" rx="2" fill="#1e293b" opacity="0.3"/>
-  <rect x="170" y="185" width="35" height="15" rx="2" fill="#1e293b" opacity="0.3"/>
-
-  <!-- HEAT ZONE (center) -->
-  <!-- Sun -->
-  <circle cx="430" cy="70" r="35" fill="#f59e0b" opacity="0.8"/>
-  <line x1="430" y1="25" x2="430" y2="10" stroke="#f59e0b" stroke-width="3" opacity="0.6"/>
-  <line x1="430" y1="115" x2="430" y2="130" stroke="#f59e0b" stroke-width="3" opacity="0.6"/>
-  <line x1="375" y1="70" x2="360" y2="70" stroke="#f59e0b" stroke-width="3" opacity="0.6"/>
-  <line x1="485" y1="70" x2="500" y2="70" stroke="#f59e0b" stroke-width="3" opacity="0.6"/>
-  <line x1="388" y1="37" x2="378" y2="27" stroke="#f59e0b" stroke-width="3" opacity="0.6"/>
-  <line x1="472" y1="103" x2="482" y2="113" stroke="#f59e0b" stroke-width="3" opacity="0.6"/>
-  <line x1="388" y1="103" x2="378" y2="113" stroke="#f59e0b" stroke-width="3" opacity="0.6"/>
-  <line x1="472" y1="37" x2="482" y2="27" stroke="#f59e0b" stroke-width="3" opacity="0.6"/>
-  <!-- Heat waves -->
-  <path d="M370 160Q380 150 390 160" stroke="#dc2626" stroke-width="2" fill="none" opacity="0.5"/>
-  <path d="M400 155Q410 145 420 155" stroke="#dc2626" stroke-width="2" fill="none" opacity="0.5"/>
-  <path d="M430 150Q440 140 450 150" stroke="#dc2626" stroke-width="2" fill="none" opacity="0.6"/>
-  <path d="M460 155Q470 145 480 155" stroke="#dc2626" stroke-width="2" fill="none" opacity="0.5"/>
-  <path d="M490 160Q500 150 510 160" stroke="#dc2626" stroke-width="2" fill="none" opacity="0.4"/>
-  <!-- Dry cracked ground -->
-  <path d="M340 200L360 202L350 210L370 208L365 218L390 212" stroke="#92400e" stroke-width="1.5" fill="none" opacity="0.4"/>
-  <path d="M430 200L440 203L435 212L455 210L450 218" stroke="#92400e" stroke-width="1.5" fill="none" opacity="0.4"/>
-  <!-- Tall building silhouettes -->
-  <rect x="370" y="120" width="20" height="80" rx="2" fill="#1e293b" opacity="0.4"/>
-  <rect x="400" y="100" width="25" height="100" rx="2" fill="#1e293b" opacity="0.4"/>
-  <rect x="440" y="115" width="20" height="85" rx="2" fill="#1e293b" opacity="0.4"/>
-
-  <!-- WATER STRESS ZONE (right) -->
-  <!-- Well/pump -->
-  <rect x="600" y="145" width="8" height="50" rx="2" fill="#1e293b" opacity="0.5"/>
-  <rect x="590" y="140" width="28" height="8" rx="2" fill="#1e293b" opacity="0.5"/>
-  <!-- Declining water level -->
-  <rect x="595" y="160" width="18" height="30" rx="2" fill="#059669" opacity="0.2"/>
-  <rect x="595" y="175" width="18" height="15" rx="2" fill="#059669" opacity="0.15"/>
-  <!-- Dotted water line declining -->
-  <line x1="595" y1="165" x2="613" y2="165" stroke="#059669" stroke-width="1" stroke-dasharray="3,3" opacity="0.5"/>
-  <line x1="595" y1="180" x2="613" y2="180" stroke="#059669" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
-  <line x1="595" y1="192" x2="613" y2="192" stroke="#059669" stroke-width="1" stroke-dasharray="3,3" opacity="0.15"/>
-  <!-- Parched ground -->
-  <path d="M570 200L590 203L585 212L605 210L600 218L620 215" stroke="#92400e" stroke-width="1.5" fill="none" opacity="0.3"/>
-  <!-- Small building silhouettes -->
-  <rect x="570" y="175" width="18" height="25" rx="2" fill="#1e293b" opacity="0.2"/>
-  <rect x="630" y="180" width="15" height="20" rx="2" fill="#1e293b" opacity="0.2"/>
-
-  <!-- Green canopy arch (top) -->
-  <path d="M20 240Q200 120 400 130Q600 120 780 240" stroke="#059669" stroke-width="4" fill="none" opacity="0.3"/>
-  <path d="M20 245Q200 130 400 138Q600 130 780 245" stroke="#059669" stroke-width="3" fill="none" opacity="0.2"/>
-  <!-- Leaf accents -->
-  <path d="M100 200Q115 170 130 200" stroke="#059669" stroke-width="2" fill="none" opacity="0.4"/>
-  <path d="M400 120Q410 95 420 120" stroke="#059669" stroke-width="2" fill="none" opacity="0.4"/>
-  <path d="M650 195Q660 170 670 195" stroke="#059669" stroke-width="2" fill="none" opacity="0.4"/>
-
-  <!-- Zone labels -->
-  <text x="120" y="280" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#2563eb" text-anchor="middle" opacity="0.7">🌊 FLOOD ZONE</text>
-  <text x="430" y="280" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#dc2626" text-anchor="middle" opacity="0.7">🌡️ HEAT ZONE</text>
-  <text x="640" y="280" font-family="Inter, sans-serif" font-size="12" font-weight="600" fill="#059669" text-anchor="middle" opacity="0.7">💧 WATER STRESS</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" role="img" aria-labelledby="title desc">
+  <title id="title">Bengaluru climate risk illustration</title>
+  <desc id="desc">A calm city edge with tree cover, water body, rain cloud, sun, and risk markers.</desc>
+  <rect width="720" height="260" rx="16" fill="#f0fdf4"/>
+  <path d="M0 194c62-22 112-18 168-7 82 17 143-15 218-23 92-10 141 25 212 21 51-3 88-20 122-38v113H0v-66Z" fill="#dbeafe"/>
+  <path d="M0 206c73-24 136-13 193 0 63 14 113 2 170-13 79-21 145-9 201 5 58 15 104 11 156-10v72H0v-54Z" fill="#bfdbfe"/>
+  <path d="M52 156h38v58H52v-58Zm54-35h46v93h-46v-93Zm65 22h34v71h-34v-71Zm357-14h44v85h-44v-85Zm63 27h37v58h-37v-58Z" fill="#e2e8f0" stroke="#cbd5e1"/>
+  <path d="M276 104h42v110h-42V104Zm55 32h37v78h-37v-78Zm52-20h48v98h-48v-98Z" fill="#ffffff" stroke="#cbd5e1"/>
+  <path d="M277 177h153" stroke="#94a3b8" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="614" cy="62" r="26" fill="#fef3c7" stroke="#d97706" stroke-width="4"/>
+  <path d="M87 65c12-21 47-20 59 1 18 0 31 14 31 30H52c0-17 14-31 35-31Z" fill="#dbeafe" stroke="#2563eb" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M77 114v19m32-19v28m33-28v19" stroke="#2563eb" stroke-width="5" stroke-linecap="round"/>
+  <path d="M474 171c0-30 42-30 42 0v43h-42v-43Z" fill="#d1fae5" stroke="#059669" stroke-width="4"/>
+  <path d="M494 214v-62" stroke="#065f46" stroke-width="5" stroke-linecap="round"/>
+  <path d="M494 178c-23-7-30-23-29-42 19 1 31 12 35 31" fill="#d1fae5" stroke="#059669" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M496 167c7-22 21-32 43-31 0 22-12 36-36 42" fill="#d1fae5" stroke="#059669" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M230 197c-15 18-15 38 0 51 15-13 15-33 0-51Z" fill="#fee2e2" stroke="#dc2626" stroke-width="4"/>
+  <path d="M231 213v19" stroke="#991b1b" stroke-width="4" stroke-linecap="round"/>
 </svg>

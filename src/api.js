@@ -1,44 +1,32 @@
-// api.js — OpenAI API communication layer
-// All API calls go through a Cloudflare Worker proxy to hide the API key.
-// Direct OpenAI calls are used ONLY if no proxy URL is configured.
+// api.js — OpenRouter API communication layer
 
 import { buildSystemPrompt } from "./utils/buildPrompt.js";
 import { parseAIResponse } from "./utils/parseResult.js";
 
 // --- Configuration ---
-const OPENAI_MODEL = "gpt-4o";
-const FALLBACK_MODEL = "gpt-4o-mini";
+const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_MODEL = import.meta.env.VITE_OPENROUTER_MODEL || "google/gemini-2.5-flash";
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 
-const API_PROXY_URL = import.meta.env.VITE_API_PROXY_URL || null;
-const OPENAI_DIRECT_KEY = import.meta.env.VITE_OPENAI_API_KEY || null;
-
 function getApiConfig() {
-  if (API_PROXY_URL) {
-    return {
-      url: `${API_PROXY_URL.replace(/\/$/, "")}/v1/chat/completions`,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_DIRECT_KEY || "proxy-key"}`,
-      },
-      proxy: true,
-      model: OPENAI_MODEL,
-    };
-  }
-  if (!OPENAI_DIRECT_KEY) {
+  const openRouterKey = import.meta.env.VITE_OPENROUTER_API_KEY || null;
+  if (!openRouterKey) {
     throw new Error(
-      "No API configuration found. Set VITE_API_PROXY_URL (Cloudflare Worker) or VITE_OPENAI_API_KEY (direct) in your .env file."
+      "No API configuration found. Set VITE_OPENROUTER_API_KEY in your .env.local file."
     );
   }
+  const headers = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${openRouterKey}`,
+    "X-OpenRouter-Title": "VanaRaksha",
+  };
+  const siteUrl = import.meta.env.VITE_OPENROUTER_SITE_URL || window.location.origin;
+  if (siteUrl) headers["HTTP-Referer"] = siteUrl;
   return {
-    url: `https://api.openai.com/v1/chat/completions`,
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENAI_DIRECT_KEY}`,
-    },
-    proxy: false,
-    model: OPENAI_MODEL,
+    url: OPENROUTER_CHAT_URL,
+    headers,
+    model: OPENROUTER_MODEL,
   };
 }
 
@@ -66,7 +54,7 @@ function buildMessages(systemPrompt, userContent, imageBase64 = null) {
   return messages;
 }
 
-async function callOpenAI(messages, model = OPENAI_MODEL, extraConfig = {}) {
+async function callOpenRouter(messages, model = OPENROUTER_MODEL, extraConfig = {}) {
   const { url, headers } = getApiConfig();
   const body = {
     model,
@@ -87,11 +75,11 @@ async function callOpenAI(messages, model = OPENAI_MODEL, extraConfig = {}) {
       });
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`API error: ${response.status} ${response.statusText} — ${errorText}`);
+        throw new Error(`OpenRouter API error: ${response.status} ${response.statusText} — ${errorText}`);
       }
       const json = await response.json();
       if (json.error) {
-        throw new Error(`API error: ${json.error.message || JSON.stringify(json.error)}`);
+        throw new Error(`OpenRouter API error: ${json.error.message || JSON.stringify(json.error)}`);
       }
       const choice = json.choices?.[0];
       if (!choice) throw new Error("No choices in API response");
@@ -101,7 +89,7 @@ async function callOpenAI(messages, model = OPENAI_MODEL, extraConfig = {}) {
       return text;
     } catch (err) {
       lastError = err;
-      console.warn(`API attempt ${attempt + 1} failed:`, err.message);
+      console.warn(`OpenRouter API attempt ${attempt + 1} failed:`, err.message);
       if (attempt < MAX_RETRIES) {
         const delay = RETRY_DELAY_MS * Math.pow(2, attempt);
         console.log(`Retrying in ${delay}ms...`);
@@ -109,7 +97,7 @@ async function callOpenAI(messages, model = OPENAI_MODEL, extraConfig = {}) {
       }
     }
   }
-  throw new Error(`API failed after ${MAX_RETRIES + 1} attempts: ${lastError?.message}`);
+  throw new Error(`OpenRouter API failed after ${MAX_RETRIES + 1} attempts: ${lastError?.message}`);
 }
 
 export async function analyzePhoto(photo, matchedWard) {
@@ -133,9 +121,9 @@ export async function analyzePhoto(photo, matchedWard) {
     `}\n` +
     (annotations.length > 0 ? `\nUser annotations:\n${annotations.join("\n")}\n\n` : "");
   try {
-    const rawResponse = await callOpenAI(
+    const rawResponse = await callOpenRouter(
       buildMessages(systemPrompt, userContent, photo.base64),
-      OPENAI_MODEL,
+      OPENROUTER_MODEL,
       { temperature: 0.2 }
     );
     return parseAIResponse(rawResponse, "photo");
@@ -203,9 +191,9 @@ export async function runSynthesis(
       : "No ward data available \u2014 use Bengaluru city-wide baselines.") +
     `\n\nYour task: Produce a single, authoritative risk assessment that synthesizes ALL evidence (photographic, testimonial, ward baseline, and city context). Be specific, cite data points, and flag any data gaps or contradictions.\n`;
   try {
-    const rawResponse = await callOpenAI(
+    const rawResponse = await callOpenRouter(
       buildMessages(systemPrompt, userContent),
-      OPENAI_MODEL,
+      OPENROUTER_MODEL,
       { temperature: 0.2 }
     );
     return parseAIResponse(rawResponse, "synthesis");
@@ -217,14 +205,18 @@ export async function runSynthesis(
 export async function checkApiHealth() {
   try {
     const config = getApiConfig();
-    const modelName = config.model;
-    const response = await fetch(
-      config.url.replace("/chat/completions", `/models/${modelName}`),
-      { method: "GET", headers: config.headers }
-    );
-    if (response.ok) return { ok: true, details: `OpenAI API reachable (${modelName})` };
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: config.headers,
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: "user", content: "Reply with OK." }],
+        max_tokens: 8,
+        temperature: 0,
+      }),
+    });
+    if (response.ok) return { ok: true, details: `OpenRouter API reachable (${config.model})` };
     const text = await response.text();
-    if (response.status === 404) return { ok: true, details: `Auth OK (model ${modelName} not found but key is valid)` };
     return { ok: false, error: `${response.status}: ${text}` };
   } catch (err) {
     return { ok: false, error: err.message };

@@ -1,4 +1,4 @@
-// buildPrompt.js — System prompt builder for Gemini API
+// buildPrompt.js — System prompt builder for the AI analysis provider
 
 const CITY_BASELINE = `BENGALURU CITY CONTEXT (2024-2026):
 - ~920m MSL, Tropical savanna, monsoon June-Sept, rainfall ~970mm (IMD 2023).

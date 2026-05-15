@@ -1,6 +1,37 @@
-export default function TierBadge({ tier = "Medium", size = "md" }) {
-  const TC = { Low:{bg:"#d1fae5",border:"#059669",text:"#065f46"}, Medium:{bg:"#fef3c7",border:"#d97706",text:"#92400e"}, High:{bg:"#fee2e2",border:"#dc2626",text:"#991b1b"}, Critical:{bg:"#7f1d1d",border:"#991b1b",text:"#fca5a5"} };
-  const s = TC[tier] || TC.Medium;
-  const sz = {sm:{p:"2px 8px",f:"0.75rem",br:"4px"},md:{p:"4px 12px",f:"0.85rem",br:"6px"},lg:{p:"6px 16px",f:"1rem",br:"8px"}}[size];
-  return <span style={{display:"inline-block",backgroundColor:s.bg,border:`2px solid ${s.border}`,color:s.text,fontWeight:"700",textTransform:"uppercase",letterSpacing:"0.5px",padding:sz.p,fontSize:sz.f,borderRadius:sz.br}}>{tier}</span>;
+const TIER_COLORS = {
+  Low: { bg: "#d1fae5", border: "#059669", text: "#065f46" },
+  Medium: { bg: "#fef3c7", border: "#d97706", text: "#92400e" },
+  High: { bg: "#fee2e2", border: "#dc2626", text: "#991b1b" },
+  Critical: { bg: "#991b1b", border: "#7f1d1d", text: "#fca5a5" },
+};
+
+export function normalizeTier(tier = "Medium") {
+  if (TIER_COLORS[tier]) return tier;
+  const value = String(tier || "").toLowerCase();
+  if (value.includes("critical")) return "Critical";
+  if (value.includes("high")) return "High";
+  if (value.includes("low") && !value.includes("moderate")) return "Low";
+  return "Medium";
+}
+
+export function getTierColors(tier = "Medium") {
+  return TIER_COLORS[normalizeTier(tier)] || TIER_COLORS.Medium;
+}
+
+export default function TierBadge({ tier = "Medium", size = "md", label }) {
+  const colors = getTierColors(tier);
+  const display = label || tier || "Medium";
+
+  return (
+    <span
+      className={`tier-badge tier-badge--${size}`}
+      style={{
+        "--tier-bg": colors.bg,
+        "--tier-border": colors.border,
+        "--tier-text": colors.text,
+      }}
+    >
+      {display}
+    </span>
+  );
 }

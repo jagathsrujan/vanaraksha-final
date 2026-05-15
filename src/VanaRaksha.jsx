@@ -1,20 +1,226 @@
-import { useState, useMemo } from "react";
-import { WARD_DB, _metadata } from "./data/WARD_DB";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import "./App.css";
+import { WARD_DB } from "./data/WARD_DB";
 import { matchWard } from "./utils/matchWard";
 import { buildSystemPrompt } from "./utils/buildPrompt";
 import { buildFallback } from "./utils/fallback";
 import { parseAIResponse } from "./utils/parseResult";
+import AppFooter from "./components/AppFooter";
+import AppHeader from "./components/AppHeader";
+import AppSection from "./components/AppSection";
+import BackgroundVideo from "./components/BackgroundVideo";
+import Button from "./components/Button";
+import CoverageMap from "./components/CoverageMap";
+import DropZone from "./components/DropZone";
+import FormInput from "./components/FormInput";
+import FormTextarea from "./components/FormTextarea";
+import PillSelector from "./components/PillSelector";
+import PrintCSS from "./components/PrintCSS";
+import ProgressTracker from "./components/ProgressTracker";
+import ReasonCard from "./components/ReasonCard";
 import ScoreGauge from "./components/ScoreGauge";
+import StepDot from "./components/StepDot";
+import SummaryCard from "./components/SummaryCard";
 import TierBadge from "./components/TierBadge";
 import WardCard from "./components/WardCard";
-import StepDot from "./components/StepDot";
-import CoverageMap from "./components/CoverageMap";
+import heroIllustrationUrl from "./assets/hero-illustration.svg";
+import logoUrl from "./assets/logo.svg";
 
-const TC = { Low:{bg:"#d1fae5",border:"#059669"}, Medium:{bg:"#fef3c7",border:"#d97706"}, High:{bg:"#fee2e2",border:"#dc2626"}, Critical:{bg:"#991b1b",border:"#7f1d1d"} };
+const STEP_LABELS = ["Start", "Location", "Property", "Photos", "Testimony", "Results"];
+const STEP_DOTS = ["Location", "Property", "Photos", "Testimony", "Results"];
+const PROPERTY_TYPES = ["Residential", "Commercial", "Agricultural", "Institutional"];
+const USER_INTENTS = ["Home Buyer", "Seller", "Researcher", "Planner"];
+const PHOTO_LIMIT = 5;
+const SOFT_PHOTO_SIZE = 5 * 1024 * 1024;
+const HARD_PHOTO_SIZE = 20 * 1024 * 1024;
+const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_DEFAULT_MODEL = "google/gemini-2.5-flash";
+
+const INITIAL_LOCATION = { address: "", ward: "", pin: "" };
+
+function makeId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function countZones() {
+  return new Set(Object.values(WARD_DB).map((ward) => ward.zone).filter(Boolean)).size;
+}
+
+function readPhotoFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+      resolve({
+        id: makeId("photo"),
+        base64,
+        preview: URL.createObjectURL(file),
+        mediaType: file.type || "image/jpeg",
+        why: "",
+        assessment: "",
+        tags: [],
+        aiAnalysis: {},
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildOpenRouterHeaders(apiKey) {
+  const headers = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "X-OpenRouter-Title": "VanaRaksha",
+  };
+
+  const siteUrl = import.meta.env.VITE_OPENROUTER_SITE_URL || window.location.origin;
+  if (siteUrl) headers["HTTP-Referer"] = siteUrl;
+  return headers;
+}
+
+async function callOpenRouter(messages, apiKey, options = {}) {
+  const model = import.meta.env.VITE_OPENROUTER_MODEL || OPENROUTER_DEFAULT_MODEL;
+  const response = await fetch(OPENROUTER_CHAT_URL, {
+    method: "POST",
+    headers: buildOpenRouterHeaders(apiKey),
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.1,
+      max_tokens: 4096,
+      response_format: { type: "json_object" },
+      ...options,
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const errorJson = await response.json();
+      detail = errorJson?.error?.message ? `: ${errorJson.error.message}` : "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(`OpenRouter analysis service returned ${response.status}${detail}`);
+  }
+
+  const json = await response.json();
+  const text = json.choices?.[0]?.message?.content;
+  if (!text) throw new Error("OpenRouter analysis service returned an empty response");
+  return text;
+}
+
+async function analyzePhotoWithOpenRouter(photo, matchedWard, apiKey) {
+  const systemPrompt = buildSystemPrompt(matchedWard);
+  const raw = await callOpenRouter(
+    [
+      {
+        role: "system",
+        content: systemPrompt,
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text:
+              "Analyze this photo for climate risk signals. Respond ONLY as valid JSON with flood_signals, heat_signals, water_signals arrays, key_observation, and confidence as Low, Medium, or High.",
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${photo.mediaType || "image/jpeg"};base64,${photo.base64}`,
+              detail: "high",
+            },
+          },
+        ],
+      },
+    ],
+    apiKey,
+    { temperature: 0.2, max_tokens: 1200 }
+  );
+  const parsed = parseAIResponse(raw, "photo");
+  if (!parsed.ok) throw new Error(parsed.error || "Photo analysis was not valid JSON");
+  return parsed.data;
+}
+
+function buildPhotoEvidence(photos) {
+  if (!photos.length) return "None";
+  return photos.map((photo, index) => {
+    const analysis = photo.aiAnalysis || {};
+    const flood = (analysis.flood_signals || []).join(", ") || "none detected";
+    const heat = (analysis.heat_signals || []).join(", ") || "none detected";
+    const water = (analysis.water_signals || []).join(", ") || "none detected";
+    return [
+      `Photo ${index + 1} [confidence: ${analysis.confidence || "Low"}]`,
+      `Flood signals: ${flood}`,
+      `Heat signals: ${heat}`,
+      `Water signals: ${water}`,
+      `Key observation: ${analysis.key_observation || "none"}`,
+      `User annotation: ${photo.why || "none"}`,
+      `User assessment: ${photo.assessment || "none"}`,
+    ].join("\n");
+  }).join("\n\n");
+}
+
+async function runOpenRouterSynthesis({
+  apiKey,
+  location,
+  matchedWard,
+  propertyType,
+  userIntent,
+  notes,
+  photos,
+  testimonies,
+}) {
+  const systemPrompt = buildSystemPrompt(matchedWard);
+  const testimonySection = testimonies.length
+    ? testimonies.map((item) =>
+      `- ${item.who || "Anonymous"} (${item.concern}, credibility ${item.credibility}/5): "${item.said || "No statement"}"`
+    ).join("\n")
+    : "None";
+
+  const prompt = `${systemPrompt}
+
+Analyze this Bengaluru property for climate risk.
+
+Location:
+- Address: ${location.address || "Not specified"}
+- Ward hint: ${location.ward || "Not specified"}
+- PIN: ${location.pin || "Not specified"}
+
+Property context:
+- Ward match: ${matchedWard?.label || "Unknown"}
+- Property type: ${propertyType || "Not specified"}
+- User intent: ${userIntent || "Not specified"}
+- Notes: ${notes || "None"}
+
+Photo evidence:
+${buildPhotoEvidence(photos)}
+
+Local testimony:
+${testimonySection}
+
+Respond ONLY as valid JSON with the complete synthesis schema: composite_score, composite_tier, flood_score, flood_tier, flood_confidence, flood_reasoning, uhi_score, uhi_tier, uhi_confidence, uhi_reasoning, water_score, water_tier, water_confidence, water_reasoning, compound_risk, executive_summary, flags, recommendations, data_sources.`;
+
+  const raw = await callOpenRouter(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: prompt },
+    ],
+    apiKey
+  );
+  const parsed = parseAIResponse(raw, "synthesis");
+  if (!parsed.ok) throw new Error(parsed.error || "Risk synthesis was not valid JSON");
+  return parsed.data;
+}
 
 export default function VanaRaksha() {
   const [step, setStep] = useState(0);
-  const [location, setLocation] = useState({address:"", ward:"", pin:""});
+  const [location, setLocation] = useState(INITIAL_LOCATION);
   const [propertyType, setPropertyType] = useState("");
   const [userIntent, setUserIntent] = useState("");
   const [notes, setNotes] = useState("");
@@ -24,246 +230,780 @@ export default function VanaRaksha() {
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   const [apiError, setApiError] = useState(null);
-  const matchedWard = useMemo(() => matchWard(location.address, location.ward, location.pin), [location]);
+  const [photoWarning, setPhotoWarning] = useState(null);
+  const headingRef = useRef(null);
+  const errorRef = useRef(null);
+  const firstPhotoRef = useRef(null);
+  const photosRef = useRef([]);
 
-  const analyzePhoto = async (photo, ward) => {
-    const prompt = buildSystemPrompt(ward);
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  const matchedWard = useMemo(
+    () => matchWard(location.address, location.ward, location.pin),
+    [location.address, location.ward, location.pin]
+  );
+
+  useEffect(() => {
+    photosRef.current = photos;
+  }, [photos]);
+
+  useEffect(() => {
+    return () => {
+      photosRef.current.forEach((photo) => {
+        if (photo.preview?.startsWith("blob:")) URL.revokeObjectURL(photo.preview);
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    requestAnimationFrame(() => headingRef.current?.focus());
+  }, [step]);
+
+  useEffect(() => {
+    if (apiError) errorRef.current?.focus();
+  }, [apiError]);
+
+  useEffect(() => {
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setApiError(null);
+        setPhotoWarning(null);
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, []);
+
+  const updateLocation = (field, value) => {
+    setLocation((current) => ({
+      ...current,
+      [field]: field === "pin" ? value.replace(/\D/g, "").slice(0, 6) : value,
+    }));
+  };
+
+  const addPhotos = async (files) => {
+    setPhotoWarning(null);
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    const remaining = PHOTO_LIMIT - photos.length;
+
+    if (!imageFiles.length) {
+      setPhotoWarning("Please choose image files only.");
+      return;
+    }
+
+    if (remaining <= 0) {
+      setPhotoWarning(`You can upload up to ${PHOTO_LIMIT} photos.`);
+      return;
+    }
+
+    const accepted = [];
+    const warnings = [];
+
+    for (const file of imageFiles.slice(0, remaining)) {
+      if (file.size > HARD_PHOTO_SIZE) {
+        warnings.push(`${file.name} is larger than 20MB and was rejected.`);
+        continue;
+      }
+      if (file.size > SOFT_PHOTO_SIZE) {
+        warnings.push(`${file.name} is larger than 5MB; it was accepted but may be slow to analyze.`);
+      }
+      accepted.push(file);
+    }
+
+    if (imageFiles.length > remaining) {
+      warnings.push(`Only ${remaining} more photo${remaining === 1 ? "" : "s"} can be added.`);
+    }
+
+    if (warnings.length) setPhotoWarning(warnings.join(" "));
+    if (!accepted.length) return;
+
+    const newPhotos = await Promise.all(accepted.map(readPhotoFile));
+    setPhotos((current) => [...current, ...newPhotos].slice(0, PHOTO_LIMIT));
+    setTimeout(() => firstPhotoRef.current?.focus(), 0);
+  };
+
+  const removePhoto = (id) => {
+    setPhotos((current) => {
+      const target = current.find((photo) => photo.id === id);
+      if (target?.preview?.startsWith("blob:")) URL.revokeObjectURL(target.preview);
+      return current.filter((photo) => photo.id !== id);
+    });
+  };
+
+  const updatePhoto = (id, field, value) => {
+    setPhotos((current) => current.map((photo) =>
+      photo.id === id ? { ...photo, [field]: value } : photo
+    ));
+  };
+
+  const addTestimony = () => {
+    setTestimonies((current) => [
+      ...current,
+      { id: makeId("testimony"), who: "", said: "", concern: "none", credibility: 3 },
+    ]);
+  };
+
+  const updateTestimony = (id, field, value) => {
+    setTestimonies((current) => current.map((item) =>
+      item.id === id
+        ? { ...item, [field]: field === "credibility" ? Number(value) : value }
+        : item
+    ));
+  };
+
+  const removeTestimony = (id) => {
+    setTestimonies((current) => current.filter((item) => item.id !== id));
+  };
+
+  const resetAssessment = () => {
+    photos.forEach((photo) => {
+      if (photo.preview?.startsWith("blob:")) URL.revokeObjectURL(photo.preview);
+    });
+    setLocation(INITIAL_LOCATION);
+    setPropertyType("");
+    setUserIntent("");
+    setNotes("");
+    setPhotos([]);
+    setTestimonies([]);
+    setResult(null);
+    setApiError(null);
+    setPhotoWarning(null);
+    setLoading(false);
+    setLoadingMsg("");
+    setStep(0);
+  };
+
+  const runAnalysis = async () => {
+    setLoading(true);
+    setApiError(null);
+    setResult(null);
+
     try {
-      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt},{inline_data:{mime_type:photo.mediaType,data:photo.base64}}]},{role:"user",parts:[{text:"Analyze this photo for climate risk signals. Respond ONLY as valid JSON with flood_signals, heat_signals, water_signals arrays, key_observation, and confidence as Low/Medium/High."}]}],
-        generationConfig:{response_mime_type:"application/json",temperature:0.1}})});
-      const json = await resp.json();
-      const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-      return text ? JSON.parse(text) : {flood_signals:[],heat_signals:[],water_signals:[],key_observation:"No data",confidence:"Low"};
-    } catch(e) {
-      console.error("Photo analysis failed",e);
-      return {flood_signals:[],heat_signals:[],water_signals:[],key_observation:"Analysis failed",confidence:"Low"};
+      const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY || "";
+      let photosForSynthesis = photos;
+      let synthesis = null;
+
+      if (apiKey.trim()) {
+        const analyzed = [];
+        for (let index = 0; index < photos.length; index += 1) {
+          setLoadingMsg(`Analyzing photo ${index + 1} of ${photos.length}...`);
+          try {
+            const aiAnalysis = await analyzePhotoWithOpenRouter(photos[index], matchedWard, apiKey);
+            analyzed.push({ ...photos[index], aiAnalysis });
+          } catch (error) {
+            analyzed.push({
+              ...photos[index],
+              aiAnalysis: {
+                flood_signals: [],
+                heat_signals: [],
+                water_signals: [],
+                key_observation: error.message,
+                confidence: "Low",
+              },
+            });
+          }
+        }
+        photosForSynthesis = analyzed;
+        setPhotos(analyzed);
+        setLoadingMsg("Synthesizing ward, photo, and testimony evidence...");
+        synthesis = await runOpenRouterSynthesis({
+          apiKey,
+          location,
+          matchedWard,
+          propertyType,
+          userIntent,
+          notes,
+          photos: photosForSynthesis,
+          testimonies,
+        });
+      } else {
+        setLoadingMsg("Calculating risk from ward baseline data...");
+      }
+
+      setResult(synthesis || buildFallback(matchedWard));
+      setStep(5);
+    } catch (error) {
+      setApiError(error.message || "Analysis failed.");
+      setResult(buildFallback(matchedWard));
+      setStep(5);
+    } finally {
+      setLoading(false);
+      setLoadingMsg("");
     }
   };
 
-const buildPhotoEvidence = () => {
-     if (!photos.length) return "None";
-     return photos.map((p, i) => {
-       const a = p.aiAnalysis || {};
-       const conf = a.confidence || "Low";
-       const floodStr = (a.flood_signals || []).join(", ") || "none detected";
-       const heatStr = (a.heat_signals || []).join(", ") || "none detected";
-       const waterStr = (a.water_signals || []).join(", ") || "none detected";
-       return `Photo ${i + 1} [confidence: ${conf}]:\n` +
-         `  Flood signals: ${floodStr}\n` +
-         `  Heat signals: ${heatStr}\n` +
-         `  Water signals: ${waterStr}\n` +
-         `  Key observation: ${a.key_observation || "none"}\n` +
-         `  User annotation: ${p.why || "none"}`;
-     }).join("\n\n");
-   };
-
-   const runSynthesis = async () => {
-     const photoSection = buildPhotoEvidence();
-     const testimonySection = testimonies.map(t => `- ${t.who||'Anonymous'} (${t.concern}, credibility ${t.credibility}/5): "${t.said}"`).join("\\n");
-     const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-     const prompt = `Analyze this Bengaluru property for climate risk.
-Location: ${location.address} ${location.ward} ${location.pin}
-Ward: ${matchedWard?.label||'Unknown'} | Type: ${propertyType} | Intent: ${userIntent}
-Notes: ${notes}
-
-PHOTO EVIDENCE (per-photo AI analysis with confidence tags):
-${photoSection}
-
-PHOTO EVIDENCE GUIDELINES:
-- High-confidence photo signals should directly influence scoring.
-- Low-confidence signals should be noted but not heavily weighted.
-- If photo signals conflict with ward baseline data, explain the discrepancy.
-- Only increase a dimension's score if multiple photos corroborate OR one photo is High confidence.
-
-Testimony:\\n${testimonySection||'None'}
-
-Respond ONLY as valid JSON with: composite_score (0-100), composite_tier, flood/uhi/water each with score+tier+confidence+reasoning, compound_risk, executive_summary, flags[], recommendations[], data_sources[]`;
-
-     const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
-       method:"POST", headers:{"Content-Type":"application/json"},
-       body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}], generationConfig:{response_mime_type:"application/json",temperature:0.1}})
-     });
-     const json = await resp.json();
-     const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-     return text ? JSON.parse(text) : null;
-   };
-
-const handleRunAnalysis = async () => {
-     setLoading(true); setApiError(null); setResult(null);
-     try {
-       const pa = [];
-       const updatedPhotos = [...photos];
-       for (let i = 0; i < Math.min(updatedPhotos.length, 5); i++) {
-         setLoadingMsg(`Analyzing photo ${i+1} of ${Math.min(updatedPhotos.length,5)}...`);
-         const result = await analyzePhoto(updatedPhotos[i], matchedWard);
-         updatedPhotos[i].aiAnalysis = result;
-         pa.push(result);
-       }
-       setPhotos(updatedPhotos);
-       setLoadingMsg("Synthesizing risk assessment...");
-       const synthesis = await runSynthesis();
-       if (synthesis) {
-         const parsed = parseAIResponse(JSON.stringify(synthesis), "synthesis");
-         setResult(parsed.ok ? parsed.data : buildFallback(matchedWard));
-       } else {
-         if (matchedWard) setResult(buildFallback(matchedWard));
-       }
-       setStep(5);
-     } catch(e) {
-       console.error(e);
-       setApiError(e.message);
-       if (matchedWard) setResult(buildFallback(matchedWard));
-     } finally {
-       setLoading(false); setLoadingMsg("");
-     }
-   };
-
-  const steps = ["","Location","Property","Photos","Testimony","Results"];
   return (
-    <div className="vana-raksha">
-      <header className="vr-header"><h1>🌿 VanaRaksha</h1><p>Bengaluru Climate Risk Assessment</p></header>
-      {step < 5 && <div className="vr-step-indicators">{[0,1,2,3,4].map(s => <StepDot key={s} n={s} current={step} label={steps[s]} />)}</div>}
+    <div className="vrm-app">
+      <PrintCSS />
+      <BackgroundVideo />
+      <AppHeader />
+      <main className="vrm-container">
+        {step > 0 && (
+          <ProgressTracker
+            currentStep={step}
+            totalSteps={STEP_LABELS.length}
+            label={STEP_LABELS[step]}
+          />
+        )}
 
-      {step === 0 && <div className="vr-step vr-landing">
-        <h2>Understand Climate Risk for Your Bengaluru Property</h2>
-        <p>VanaRaksha analyzes flood, heat island (UHI), and water stress risk using satellite imagery, ward data, and AI.</p>
-        <div className="vr-three-pillars">
-          <div className="vr-pillar" style={{borderColor:"#dc2626"}}><h3>🌊 Flood Risk</h3><p>Historical flooding, drainage, terrain</p></div>
-          <div className="vr-pillar" style={{borderColor:"#dc2626"}}><h3>🌡️ Urban Heat Island</h3><p>Vegetation, impervious surfaces, temperature</p></div>
-          <div className="vr-pillar" style={{borderColor:"#dc2626"}}><h3>💧 Water Stress</h3><p>Groundwater, water supply, rainfall</p></div>
-        </div>
-        <CoverageMap />
-        <p className="vr-covered-wards">Covers {Object.keys(WARD_DB).length} wards across all 8 BBMP zones</p>
-        <button className="vr-cta" onClick={() => setStep(1)}>Start Assessment →</button>
-      </div>}
+        {step === 0 && (
+          <LandingPage
+            headingRef={headingRef}
+            onStart={() => setStep(1)}
+            wardCount={Object.keys(WARD_DB).length}
+            zoneCount={countZones()}
+          />
+        )}
 
-      {step === 1 && <div className="vr-step">
-        <h2>📍 Step 1: Location</h2>
-        <div className="vr-form-group"><label>Street Address / Area</label><input type="text" placeholder="e.g., 80 Feet Road, Koramangala" value={location.address} onChange={e => setLocation(p=>({...p,address:e.target.value}))} /></div>
-        <div className="vr-form-group"><label>Ward Name (optional)</label><input type="text" placeholder="e.g., Koramangala" value={location.ward} onChange={e => setLocation(p=>({...p,ward:e.target.value}))} /></div>
-        <div className="vr-form-group"><label>PIN Code (optional)</label><input type="text" placeholder="e.g., 560034" value={location.pin} onChange={e => setLocation(p=>({...p,pin:e.target.value}))} /></div>
-        {matchedWard && <WardCard ward={matchedWard} />}
-        {!matchedWard && location.address && <p className="vr-warning">⚠️ Ward not in database. Will use interpolation or city averages.</p>}
-        <div className="vr-nav"><button onClick={()=>setStep(0)}>← Back</button><button onClick={()=>setStep(2)} disabled={!location.address}>Next →</button></div>
-      </div>}
+        {step === 1 && (
+          <LocationStep
+            headingRef={headingRef}
+            location={location}
+            matchedWard={matchedWard}
+            onChange={updateLocation}
+            onBack={() => setStep(0)}
+            onNext={() => setStep(2)}
+          />
+        )}
 
-      {step === 2 && <div className="vr-step">
-        <h2>🏠 Step 2: Property Details</h2>
-        <div className="vr-form-group"><label>Property Type</label><div className="vr-selector">{["Residential","Commercial","Agricultural","Institutional"].map(t=><button key={t} className={propertyType===t?"active":""} onClick={()=>setPropertyType(t)}>{t}</button>)}</div></div>
-        <div className="vr-form-group"><label>Your Intent</label><div className="vr-selector">{["Home Buyer","Seller","Researcher","Planner"].map(i=><button key={i} className={userIntent===i?"active":""} onClick={()=>setUserIntent(i)}>{i}</button>)}</div></div>
-        <div className="vr-form-group"><label>Additional Notes</label><textarea placeholder="Any specific concerns..." value={notes} onChange={e=>setNotes(e.target.value)} /></div>
-        <div className="vr-nav"><button onClick={()=>setStep(1)}>← Back</button><button onClick={()=>setStep(3)} disabled={!propertyType}>Next →</button></div>
-      </div>}
+        {step === 2 && (
+          <PropertyStep
+            headingRef={headingRef}
+            propertyType={propertyType}
+            userIntent={userIntent}
+            notes={notes}
+            onChangePropertyType={setPropertyType}
+            onChangeIntent={setUserIntent}
+            onChangeNotes={setNotes}
+            onBack={() => setStep(1)}
+            onNext={() => setStep(3)}
+          />
+        )}
 
-      {step === 3 && <div className="vr-step">
-        <h2>📸 Step 3: Photo Evidence</h2>
-        <p>Upload up to 5 photos showing conditions around the property.</p>
-        <div className="vr-photo-grid">
-          {photos.map((photo, idx) => (
-            <div key={photo.id} className="vr-photo-card">
-              <img src={photo.preview} alt={`Evidence ${idx + 1}`} />
-              <textarea placeholder="Why did you take this photo?" value={photo.why} onChange={e => setPhotos(prev => prev.map(p => p.id === photo.id ? {...p, why: e.target.value} : p))} />
-              <textarea placeholder="Your assessment of risk" value={photo.assessment} onChange={e => setPhotos(prev => prev.map(p => p.id === photo.id ? {...p, assessment: e.target.value} : p))} />
-              <button className="vr-remove-btn" onClick={() => setPhotos(prev => prev.filter(p => p.id !== photo.id))}>✕ Remove</button>
-            </div>
-          ))}
-        </div>
-        {photos.length < 5 && <button className="vr-add-photo-btn" onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*";i.multiple=true;i.onchange=e=>{Array.from(e.target.files).forEach(f=>{const r=new FileReader();r.onload=ev=>{setPhotos(prev=>[...prev,{id:Date.now()+Math.random(),base64:ev.target.result.split(",")[1],preview:URL.createObjectURL(f),mediaType:f.type,why:"",assessment:"",tags:[]}])};r.readAsDataURL(f)})};i.click()}}>+ Add Photos ({photos.length}/5)</button>}
-        <div className="vr-nav"><button onClick={()=>setStep(2)}>← Back</button><button onClick={()=>setStep(4)}>Next →</button></div>
-      </div>}
+        {step === 3 && (
+          <PhotosStep
+            headingRef={headingRef}
+            photos={photos}
+            photoWarning={photoWarning}
+            firstPhotoRef={firstPhotoRef}
+            onAddPhotos={addPhotos}
+            onRemovePhoto={removePhoto}
+            onUpdatePhotoAnnotation={updatePhoto}
+            onBack={() => setStep(2)}
+            onNext={() => setStep(4)}
+          />
+        )}
 
-      {step === 4 && <div className="vr-step">
-        <h2>🗣️ Step 4: Local Testimony</h2>
-        <p>Add statements from residents, officials, or reports.</p>
-        {testimonies.map((t, idx) => (
-          <div key={t.id} className="vr-testimony-card">
-            <input placeholder="Who said this?" value={t.who} onChange={e => setTestimonies(prev => prev.map(item => item.id === t.id ? {...item, who: e.target.value} : item))} />
-            <textarea placeholder="What did they report?" value={t.said} onChange={e => setTestimonies(prev => prev.map(item => item.id === t.id ? {...item, said: e.target.value} : item))} />
-            <div className="vr-testimony-row">
-              <label>Concern:</label>
-              <select value={t.concern} onChange={e => setTestimonies(prev => prev.map(item => item.id === t.id ? {...item, concern: e.target.value} : item))}>{["none","low","medium","high"].map(c => <option key={c} value={c}>{c}</option>)}</select>
-              <label>Credibility (1–5):</label>
-              <input type="range" min={1} max={5} value={t.credibility} onChange={e => setTestimonies(prev => prev.map(item => item.id === t.id ? {...item, credibility: parseInt(e.target.value)} : item))} />
-              <span>{t.credibility}</span>
-            </div>
-            <button className="vr-remove-btn" onClick={() => setTestimonies(prev => prev.filter(item => item.id !== t.id))}>✕</button>
-          </div>
-        ))}
-        <button className="vr-add-btn" onClick={() => setTestimonies(prev => [...prev, {id:Date.now(),who:"",said:"",concern:"medium",credibility:3}])}>+ Add Testimony</button>
-        <div className="vr-nav"><button onClick={()=>setStep(3)}>← Back</button><button onClick={handleRunAnalysis} disabled={loading}>{loading ? "Analyzing..." : "🚀 Run AI Analysis"}</button></div>
-        {apiError && <div className="vr-error"><strong>Error:</strong> {apiError}{result && <p>Showing fallback results based on ward baseline data.</p>}</div>}
-      </div>}
+        {step === 4 && (
+          <TestimonyStep
+            headingRef={headingRef}
+            testimonies={testimonies}
+            onAdd={addTestimony}
+            onRemove={removeTestimony}
+            onUpdateField={updateTestimony}
+            onNext={runAnalysis}
+            onBack={() => setStep(3)}
+            loadingMsg={loadingMsg}
+            loading={loading}
+            apiError={apiError}
+            errorRef={errorRef}
+          />
+        )}
 
-      {step === 5 && result && <div className="vr-step">
-        <h2>📊 Risk Assessment Results</h2>
-        <div className="vr-result-header"><h3>Overall Risk: {result.composite_score}/100</h3><TierBadge tier={result.composite_tier} /></div>
-        <div className="vr-gauges">
-          <ScoreGauge score={result.flood_score} tier={result.flood_tier} label="Flood Risk" confidence={result.flood_confidence} />
-          <ScoreGauge score={result.uhi_score} tier={result.uhi_tier} label="Heat Island Risk" confidence={result.uhi_confidence} />
-          <ScoreGauge score={result.water_score} tier={result.water_tier} label="Water Stress" confidence={result.water_confidence} />
-        </div>
-        <div className="vr-reasoning-cards">
-          <div className="vr-reasoning-card"><h4>🌊 Flood Analysis</h4><p>{result.flood_reasoning}</p></div>
-          <div className="vr-reasoning-card"><h4>🌡️ UHI Analysis</h4><p>{result.uhi_reasoning}</p></div>
-          <div className="vr-reasoning-card"><h4>💧 Water Stress Analysis</h4><p>{result.water_reasoning}</p></div>
-        </div>
-        <div className="vr-compound"><h4>🔗 Compound Risk Interactions</h4><p>{result.compound_risk}</p></div>
-        <div className="vr-summary"><h4>📝 Executive Summary</h4><p>{result.executive_summary}</p></div>
-        <div className="vr-flags"><h4>🔴 Risk Flags</h4><ul>{(result.flags||[]).map((f,i) => <li key={i}>{f}</li>)}</ul></div>
-        <div className="vr-recommendations"><h4>✅ Recommendations</h4><ol>{(result.recommendations||[]).map((r,i) => <li key={i}>{r}</li>)}</ol></div>
-        <div className="vr-sources"><h4>📚 Data Sources</h4><div className="vr-source-tags">{(result.data_sources||[]).map((s,i) => <span key={i} className="vr-source-tag">{s}</span>)}</div></div>
-        <div className="vr-nav"><button onClick={()=>setStep(0)}>New Assessment</button><button onClick={()=>{setStep(3);setResult(null)}}>Refine with More Data</button></div>
-      </div>}
+        {step === 5 && result && (
+          <ResultsPage
+            headingRef={headingRef}
+            result={result}
+            matchedWard={matchedWard}
+            apiError={apiError}
+            errorRef={errorRef}
+            onNewAssessment={resetAssessment}
+            onRefine={() => {
+              setResult(null);
+              setApiError(null);
+              setStep(3);
+            }}
+          />
+        )}
+      </main>
+      <AppFooter currentStep={step} />
     </div>
   );
 }
 
-const style = document.createElement("style");
-style.textContent = `
-  .vana-raksha{font-family:system-ui,sans-serif;max-width:800px;margin:0 auto;padding:20px;color:#1e293b}
-  .vr-header{text-align:center;margin-bottom:30px}.vr-header h1{font-size:2rem;margin:0}.vr-header p{color:#64748b}
-  .vr-step-indicators{display:flex;gap:8px;justify-content:center;margin-bottom:24px;flex-wrap:wrap}
-  .vr-step{animation:fadeIn 0.3s ease}@keyframes fadeIn{from{opacity:0}to{opacity:1}}
-  .vr-form-group{margin-bottom:16px}.vr-form-group label{display:block;font-weight:600;margin-bottom:4px;font-size:.9rem}
-  .vr-form-group input,.vr-form-group textarea,.vr-form-group select{width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:.95rem;box-sizing:border-box;font-family:inherit}
-  .vr-form-group textarea{min-height:80px;resize:vertical}
-  .vr-selector{display:flex;gap:8px;flex-wrap:wrap}
-  .vr-selector button{padding:8px 16px;border:2px solid #cbd5e1;border-radius:8px;background:white;cursor:pointer;font-size:.9rem;transition:all .2s}
-  .vr-selector button.active{border-color:#059669;background:#d1fae5;color:#065f46;font-weight:600}
-  .vr-nav{display:flex;justify-content:space-between;margin-top:24px;flex-wrap:wrap;gap:8px}
-  .vr-nav button{padding:10px 24px;border:none;border-radius:8px;font-size:.95rem;cursor:pointer;font-weight:600;transition:all .2s}
-  .vr-nav button:first-child{background:#f1f5f9;color:#475569}.vr-nav button:last-child{background:#059669;color:white}
-  .vr-nav button:disabled{opacity:.5;cursor:not-allowed}
-  .vr-cta{display:block;width:100%;padding:16px;background:#059669;color:white;border:none;border-radius:12px;font-size:1.2rem;font-weight:700;cursor:pointer;margin-top:24px}
-  .vr-warning{background:#fef3c7;padding:12px;border-radius:8px;color:#92400e;font-size:.9rem}
-  .vr-error{background:#fee2e2;padding:12px;border-radius:8px;color:#991b1b;font-size:.9rem;margin-top:16px}
-  .vr-three-pillars{display:grid;grid-template-columns:1fr;gap:12px;margin:20px 0}
-  .vr-pillar{padding:16px;border-radius:12px;border:2px solid #dc2626;background:#fef2f2}
-  .vr-pillar h3{margin:0 0 4px;font-size:1rem}.vr-pillar p{margin:0;font-size:.9rem;color:#64748b}
-  .vr-covered-wards{color:#64748b;font-size:.85rem;margin-top:12px}
-  .vr-photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
-  .vr-photo-card{border:1px solid #e2e8f0;border-radius:8px;padding:8px}
-  .vr-photo-card img{width:100%;height:150px;object-fit:cover;border-radius:4px}
-  .vr-photo-card textarea{width:100%;min-height:40px;margin-top:4px;font-size:.8rem;padding:6px;box-sizing:border-box}
-  .vr-remove-btn{background:none;border:none;color:#dc2626;cursor:pointer;font-size:.85rem;padding:4px}
-  .vr-add-photo-btn,.vr-add-btn{display:block;width:100%;padding:12px;border:2px dashed #cbd5e1;background:none;border-radius:8px;color:#64748b;cursor:pointer;font-size:.95rem;margin-top:12px}
-  .vr-testimony-card{border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px}
-  .vr-testimony-row{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
-  .vr-testimony-row label,.vr-testimony-row select,.vr-testimony-row input[type=range]{font-size:.85rem}
-  .vr-result-header{text-align:center;margin-bottom:24px}
-  .vr-gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;margin:24px 0}
-  .vr-reasoning-cards{display:grid;grid-template-columns:1fr;gap:12px;margin:20px 0}
-  .vr-reasoning-card{background:#f8fafc;border-radius:8px;padding:16px;border-left:4px solid}
-  .vr-reasoning-card:nth-child(1){border-color:#2563eb}.vr-reasoning-card:nth-child(2){border-color:#dc2626}.vr-reasoning-card:nth-child(3){border-color:#059669}
-  .vr-reasoning-card h4{margin:0 0 8px;font-size:1rem}.vr-reasoning-card p{margin:0;font-size:.9rem;color:#475569;line-height:1.5}
-  .vr-compound,.vr-summary{background:#f0fdf4;border-radius:8px;padding:16px;margin:16px 0}
-  .vr-compound h4,.vr-summary h4{margin:0 0 8px}
-  .vr-flags ul,.vr-recommendations ol{margin:0;padding-left:20px}
-  .vr-flags li,.vr-recommendations li{margin-bottom:8px;font-size:.9rem;line-height:1.4}
-  .vr-sources{margin:20px 0}.vr-source-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-  .vr-source-tag{background:#f1f5f9;padding:4px 10px;border-radius:12px;font-size:.8rem}
-`;
-document.head.appendChild(style);
+function LandingPage({ headingRef, onStart, wardCount, zoneCount }) {
+  return (
+    <section className="landing slide-up" aria-labelledby="landing-title">
+      <img className="landing__hero-icon" src={logoUrl} alt="" aria-hidden="true" />
+      <h1 id="landing-title" ref={headingRef} tabIndex="-1">
+        Understand Climate Risk for Your Bengaluru Property
+      </h1>
+      <p className="landing__subtitle">
+        VanaRaksha assesses flood risk, urban heat island exposure, and water stress using curated BBMP ward data, photo evidence, and local testimony.
+      </p>
+
+      <div className="landing__illustration" aria-hidden="true">
+        <img src={heroIllustrationUrl} alt="" />
+      </div>
+
+      <div className="landing__steps" aria-label="Assessment flow">
+        {STEP_DOTS.map((label, index) => (
+          <StepDot key={label} n={index} current={0} label={label} />
+        ))}
+      </div>
+
+      <div className="pillar-grid">
+        <PillarCard
+          accent="var(--danger)"
+          title="🌊 Flood Risk"
+          body="Historical flooding, drainage capacity, terrain, soils, and nearby lake systems."
+        />
+        <PillarCard
+          accent="var(--warning)"
+          title="🌡️ Urban Heat Island"
+          body="Vegetation cover, impervious surfaces, density, and observed heat delta."
+        />
+        <PillarCard
+          accent="var(--info)"
+          title="💧 Water Stress"
+          body="Groundwater depth, BWSSB coverage, rainfall, and contamination proximity."
+        />
+      </div>
+
+      <CoverageMap />
+      <p className="coverage-note">
+        Covers {wardCount} wards across {zoneCount} BBMP zones represented in the database.
+      </p>
+      <Button size="large" onClick={onStart}>Start Assessment →</Button>
+    </section>
+  );
+}
+
+function PillarCard({ accent, title, body }) {
+  return (
+    <article className="pillar-card" style={{ "--accent-color": accent }}>
+      <h3>{title}</h3>
+      <p>{body}</p>
+    </article>
+  );
+}
+
+function LocationStep({ headingRef, location, matchedWard, onChange, onBack, onNext }) {
+  const hasAddress = location.address.trim().length > 0;
+
+  return (
+    <AppSection headingRef={headingRef} id="location-step-title" title="📍 Step 1: Location" size="narrow">
+      <FormInput
+        id="street-address"
+        label="Street Address / Area"
+        placeholder="e.g., 80 Feet Road, Koramangala"
+        value={location.address}
+        onChange={(event) => onChange("address", event.target.value)}
+        autoComplete="street-address"
+      />
+      <FormInput
+        id="ward-name"
+        label="Ward Name (optional)"
+        placeholder="e.g., Koramangala"
+        value={location.ward}
+        onChange={(event) => onChange("ward", event.target.value)}
+        helperText="A ward or neighborhood hint improves matching."
+      />
+      <FormInput
+        id="pin-code"
+        label="PIN Code (optional)"
+        placeholder="e.g., 560034"
+        value={location.pin}
+        onChange={(event) => onChange("pin", event.target.value)}
+        maxLength={6}
+        inputMode="numeric"
+        pattern="[0-9]*"
+        helperText="Six digits, if known."
+      />
+
+      {matchedWard && <WardCard ward={matchedWard} />}
+
+      {!matchedWard && hasAddress && (
+        <div className="status-card status-card--warning" role="status">
+          ⚠️ Ward not in database. VanaRaksha will use interpolation or city averages.
+        </div>
+      )}
+
+      <div className="button-row">
+        <Button variant="secondary" onClick={onBack}>← Back</Button>
+        <Button onClick={onNext} disabled={!hasAddress}>Next →</Button>
+      </div>
+    </AppSection>
+  );
+}
+
+function PropertyStep({
+  headingRef,
+  propertyType,
+  userIntent,
+  notes,
+  onChangePropertyType,
+  onChangeIntent,
+  onChangeNotes,
+  onNext,
+  onBack,
+}) {
+  return (
+    <AppSection headingRef={headingRef} id="property-step-title" title="🏠 Step 2: Property Details" size="narrow">
+      <PillSelector
+        legend="Property Type"
+        name="property-type"
+        options={PROPERTY_TYPES}
+        value={propertyType}
+        onChange={onChangePropertyType}
+      />
+      <PillSelector
+        legend="Your Intent"
+        name="user-intent"
+        options={USER_INTENTS}
+        value={userIntent}
+        onChange={onChangeIntent}
+      />
+      <FormTextarea
+        id="property-notes"
+        label="Additional Notes"
+        placeholder="Any specific concerns..."
+        minLength={0}
+        value={notes}
+        onChange={(event) => onChangeNotes(event.target.value)}
+      />
+      <div className="button-row">
+        <Button variant="secondary" onClick={onBack}>← Back</Button>
+        <Button onClick={onNext} disabled={!propertyType}>Next →</Button>
+      </div>
+    </AppSection>
+  );
+}
+
+function PhotosStep({
+  headingRef,
+  photos,
+  photoWarning,
+  firstPhotoRef,
+  onAddPhotos,
+  onRemovePhoto,
+  onUpdatePhotoAnnotation,
+  onNext,
+  onBack,
+}) {
+  const fileInputRef = useRef(null);
+
+  return (
+    <AppSection
+      headingRef={headingRef}
+      id="photos-step-title"
+      title="📸 Step 3: Photo Evidence"
+      intro="Upload up to 5 photos showing conditions around the property."
+      size="wide"
+    >
+      {photos.length === 0 ? (
+        <DropZone onFiles={onAddPhotos} />
+      ) : (
+        <>
+          <div className="photo-grid">
+            {photos.map((photo, index) => (
+              <article
+                key={photo.id}
+                className="photo-card"
+                tabIndex="-1"
+                ref={index === 0 ? firstPhotoRef : undefined}
+                aria-label={`Photo evidence ${index + 1}`}
+              >
+                <img src={photo.preview} alt={`Evidence ${index + 1}`} />
+                <Button
+                  className="photo-card__remove"
+                  variant="danger"
+                  size="small"
+                  aria-label={`Remove photo ${index + 1}`}
+                  onClick={() => onRemovePhoto(photo.id)}
+                >
+                  ✕
+                </Button>
+                <label className="form-label" htmlFor={`photo-why-${photo.id}`}>
+                  Why did you take this photo?
+                </label>
+                <textarea
+                  id={`photo-why-${photo.id}`}
+                  className="form-control"
+                  value={photo.why}
+                  placeholder="Why did you take this photo?"
+                  onChange={(event) => onUpdatePhotoAnnotation(photo.id, "why", event.target.value)}
+                />
+                <label className="form-label" htmlFor={`photo-assessment-${photo.id}`}>
+                  Your assessment
+                </label>
+                <textarea
+                  id={`photo-assessment-${photo.id}`}
+                  className="form-control"
+                  value={photo.assessment}
+                  placeholder="What risk signal does it show?"
+                  onChange={(event) => onUpdatePhotoAnnotation(photo.id, "assessment", event.target.value)}
+                />
+              </article>
+            ))}
+          </div>
+
+          {photos.length < PHOTO_LIMIT && (
+            <>
+              <button
+                type="button"
+                className="add-photo-button"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                + Add Photos ({photos.length}/{PHOTO_LIMIT})
+              </button>
+              <input
+                ref={fileInputRef}
+                className="sr-only"
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(event) => {
+                  onAddPhotos(Array.from(event.target.files || []));
+                  event.target.value = "";
+                }}
+              />
+            </>
+          )}
+        </>
+      )}
+
+      {photoWarning && (
+        <div className="status-card status-card--warning" role="status" aria-live="polite">
+          ⚠️ {photoWarning}
+        </div>
+      )}
+
+      <div className="button-row">
+        <Button variant="secondary" onClick={onBack}>← Back</Button>
+        <Button onClick={onNext}>Next →</Button>
+      </div>
+    </AppSection>
+  );
+}
+
+function TestimonyStep({
+  headingRef,
+  testimonies,
+  onAdd,
+  onRemove,
+  onUpdateField,
+  onNext,
+  onBack,
+  loadingMsg,
+  loading,
+  apiError,
+  errorRef,
+}) {
+  return (
+    <AppSection
+      headingRef={headingRef}
+      id="testimony-step-title"
+      title="🗣️ Step 4: Local Testimony"
+      intro="Add statements from residents, officials, or reports."
+      size="narrow"
+    >
+      <div className="testimony-list">
+        {testimonies.map((item, index) => (
+          <article key={item.id} className="testimony-card vr-card" aria-label={`Testimony ${index + 1}`}>
+            <Button
+              className="testimony-card__remove"
+              variant="danger"
+              size="small"
+              aria-label={`Remove testimony ${index + 1}`}
+              onClick={() => onRemove(item.id)}
+            >
+              ✕
+            </Button>
+            <FormInput
+              id={`testimony-who-${item.id}`}
+              label="Who said this"
+              placeholder="Resident, official, report title..."
+              value={item.who}
+              onChange={(event) => onUpdateField(item.id, "who", event.target.value)}
+            />
+            <FormTextarea
+              id={`testimony-said-${item.id}`}
+              label="What did they report"
+              placeholder="Describe flooding, heat, water shortages, or observations..."
+              value={item.said}
+              onChange={(event) => onUpdateField(item.id, "said", event.target.value)}
+            />
+            <div className="testimony-card__grid">
+              <div className="form-group">
+                <label className="form-label" htmlFor={`testimony-concern-${item.id}`}>Concern</label>
+                <select
+                  id={`testimony-concern-${item.id}`}
+                  className="form-select"
+                  value={item.concern}
+                  onChange={(event) => onUpdateField(item.id, "concern", event.target.value)}
+                >
+                  {["none", "low", "medium", "high"].map((concern) => (
+                    <option key={concern} value={concern}>{concern}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor={`testimony-credibility-${item.id}`}>Credibility</label>
+                <div className="range-row">
+                  <input
+                    id={`testimony-credibility-${item.id}`}
+                    type="range"
+                    min="1"
+                    max="5"
+                    value={item.credibility}
+                    onChange={(event) => onUpdateField(item.id, "credibility", event.target.value)}
+                  />
+                  <span className="range-value">{item.credibility}</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <Button variant="secondary" onClick={onAdd}>+ Add Testimony</Button>
+
+      {apiError && (
+        <div
+          ref={errorRef}
+          className="status-card status-card--error"
+          role="alert"
+          tabIndex="-1"
+        >
+          <strong>{apiError}</strong>
+          <p>Showing fallback results based on ward baseline data.</p>
+        </div>
+      )}
+
+      <div className="button-row">
+        <Button variant="secondary" onClick={onBack} disabled={loading}>← Back</Button>
+        <Button onClick={onNext} disabled={loading}>
+          {loading ? "Analyzing..." : "🚀 Run AI Analysis"}
+        </Button>
+      </div>
+
+      {loadingMsg && (
+        <p className="loading-status" aria-live="polite">{loadingMsg}</p>
+      )}
+    </AppSection>
+  );
+}
+
+function ResultsPage({
+  headingRef,
+  result,
+  matchedWard,
+  apiError,
+  errorRef,
+  onNewAssessment,
+  onRefine,
+}) {
+  const sources = result.data_sources || [];
+  const flags = result.flags || [];
+  const recommendations = result.recommendations || [];
+
+  return (
+    <AppSection headingRef={headingRef} id="results-step-title" title="📊 Risk Assessment Results" size="wide">
+      {apiError && (
+        <div ref={errorRef} className="status-card status-card--error" role="alert" tabIndex="-1">
+          <strong>{apiError}</strong>
+          <p>Showing fallback results based on ward baseline data.</p>
+        </div>
+      )}
+
+      <div className="results-header">
+        <div className="results-header__score">
+          <span className="results-header__label">Overall Risk</span>
+          <span className="results-header__value">{Math.round(result.composite_score ?? 0)}/100</span>
+        </div>
+        <TierBadge tier={result.composite_tier} size="lg" />
+      </div>
+
+      <div className="gauge-grid">
+        <ScoreGauge
+          score={result.flood_score}
+          tier={result.flood_tier}
+          label="Flood Risk"
+          confidence={result.flood_confidence}
+        />
+        <ScoreGauge
+          score={result.uhi_score}
+          tier={result.uhi_tier}
+          label="Heat Island Risk"
+          confidence={result.uhi_confidence}
+        />
+        <ScoreGauge
+          score={result.water_score}
+          tier={result.water_tier}
+          label="Water Stress"
+          confidence={result.water_confidence}
+        />
+      </div>
+
+      <div className="reason-grid">
+        <ReasonCard title="🌊 Flood Analysis" accent="var(--info)">
+          {result.flood_reasoning}
+        </ReasonCard>
+        <ReasonCard title="🌡️ UHI Analysis" accent="var(--danger)">
+          {result.uhi_reasoning}
+        </ReasonCard>
+        <ReasonCard title="💧 Water Stress Analysis" accent="var(--primary)">
+          {result.water_reasoning}
+        </ReasonCard>
+      </div>
+
+      <div className="summary-stack">
+        <SummaryCard title="🔗 Compound Risk Interactions" accent="var(--warning)">
+          <p>{result.compound_risk}</p>
+        </SummaryCard>
+        <SummaryCard title="📝 Executive Summary" accent="var(--primary)">
+          <p>{result.executive_summary}</p>
+        </SummaryCard>
+        <SummaryCard title="🔴 Risk Flags" accent="var(--danger)">
+          {flags.length ? (
+            <ul className="risk-list">
+              {flags.map((flag, index) => <li key={`${flag}-${index}`}>{flag}</li>)}
+            </ul>
+          ) : (
+            <p>No risk flags were raised.</p>
+          )}
+        </SummaryCard>
+        <SummaryCard title="✅ Recommendations" accent="var(--primary)">
+          {recommendations.length ? (
+            <ol className="recommendation-list">
+              {recommendations.map((recommendation, index) => (
+                <li key={`${recommendation}-${index}`}>{recommendation}</li>
+              ))}
+            </ol>
+          ) : (
+            <p>No recommendations were generated.</p>
+          )}
+        </SummaryCard>
+        <SummaryCard title="📚 Data Sources" accent="var(--info)">
+          <div className="source-tags">
+            {sources.length ? sources.map((source, index) => (
+              <span className="source-tag" key={`${source}-${index}`}>{source}</span>
+            )) : <span className="source-tag">WARD_DB</span>}
+          </div>
+        </SummaryCard>
+      </div>
+
+      {matchedWard && <WardCard ward={matchedWard} />}
+
+      <div className="button-row">
+        <Button variant="secondary" onClick={onNewAssessment}>New Assessment</Button>
+        <Button onClick={onRefine}>Refine with More Data</Button>
+      </div>
+    </AppSection>
+  );
+}
+
+const rootElement = document.getElementById("root");
+if (rootElement) {
+  createRoot(rootElement).render(<VanaRaksha />);
+}
